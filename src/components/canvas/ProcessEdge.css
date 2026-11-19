@@ -112,6 +112,26 @@
   letter-spacing: -0.01em;
 }
 
+.process-edge-label.is-blocked {
+  border-style: dashed;
+  border-color: #d7e0e8;
+  background: rgba(250, 252, 253, 0.96);
+}
+
+.process-edge-label__status {
+  overflow: hidden;
+  color: #7a8e9f;
+  font-family: var(--mono);
+  font-size: 6px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+}
+
+.process-edge-line.is-blocked {
+  opacity: 0.72;
+}
+
 .process-edge-label__remove {
   position: absolute;
   top: -7px;

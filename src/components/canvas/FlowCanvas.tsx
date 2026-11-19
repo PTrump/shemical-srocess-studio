@@ -64,6 +64,7 @@ interface FlowCanvasProps {
   nodes: ProcessNode[]
   edges: ProcessEdge[]
   running: boolean
+  isStale: boolean
   canvasApiRef: RefObject<CanvasApi | null>
   onNodesChange: OnNodesChange<ProcessNode>
   onEdgesChange: OnEdgesChange<ProcessEdge>
@@ -81,6 +82,7 @@ export function FlowCanvas({
   nodes,
   edges,
   running,
+  isStale,
   canvasApiRef,
   onNodesChange,
   onEdgesChange,
@@ -205,8 +207,11 @@ export function FlowCanvas({
         <div className="flow-canvas__meta">
           <span className="canvas-model-tag">
             <span />
-            DEMO MODEL
+            ENGINE MODEL
           </span>
+          {isStale && (
+            <span className="canvas-stale-tag">STALE · 上次结果</span>
+          )}
           <span className="canvas-count">
             <b>{nodes.length}</b> 个节点
           </span>

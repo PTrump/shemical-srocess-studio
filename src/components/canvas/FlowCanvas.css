@@ -105,6 +105,19 @@
   background: var(--teal);
 }
 
+.canvas-stale-tag {
+  padding: 2px 6px;
+  border: 1px solid #ecdcb9;
+  border-radius: 3px;
+  background: #fdf9ef;
+  color: #8b651f;
+  font-family: var(--mono);
+  font-size: 6.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
 .canvas-count {
   color: var(--muted-2);
   font-size: 9px;

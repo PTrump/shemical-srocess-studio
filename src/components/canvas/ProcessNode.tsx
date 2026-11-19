@@ -18,6 +18,14 @@ import {
 import { EquipmentGlyph } from '../equipment/EquipmentGlyph'
 import './ProcessNode.css'
 
+const STATUS_LABELS: Record<string, string> = {
+  calculated: 'CALCULATED',
+  blocked: 'BLOCKED',
+  failed: 'FAILED',
+  unsupported: 'UNSUPPORTED',
+  unavailable: '—',
+}
+
 function readoutValue(value: number | undefined, digits: 1 | 2): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return '—'
@@ -30,6 +38,7 @@ function readoutValue(value: number | undefined, digits: 1 | 2): string {
 export function ProcessNode({ id, data, selected }: NodeProps) {
   const nodeData = data as unknown as EquipmentNodeData
   const { simulation, deleteNode } = useStudioCanvas()
+  const equipment = simulation.equipment[id]
   const state = simulation.nodeOutputs[id]
   const isStream = nodeData.kind === 'stream'
   const role: StreamRole = nodeData.role ?? 'feed'
@@ -38,10 +47,14 @@ export function ProcessNode({ id, data, selected }: NodeProps) {
   const kindMeta = KIND_META[nodeData.kind]
   const roleMeta = STREAM_ROLE_LABELS[role]
   const glyphRole = isStream ? role : undefined
+  const status = equipment?.status ?? 'unavailable'
+  const statusLabel =
+    simulation.status === 'pending'
+      ? 'PENDING'
+      : STATUS_LABELS[status] ?? status
 
-  const flow = state?.flow ?? nodeData.params.flow ?? 0
-  const temperature =
-    state?.temperature ?? nodeData.params.temperature ?? 25
+  const flow = state?.flowTph
+  const temperature = state?.temperatureC
 
   const stateLabel = isStream
     ? roleMeta.en.toUpperCase()
@@ -59,10 +72,12 @@ export function ProcessNode({ id, data, selected }: NodeProps) {
         `process-node--${nodeData.kind}`,
         isStream ? `process-node--${role}` : '',
         selected ? 'is-selected' : '',
+        status !== 'calculated' ? `is-status-${status}` : '',
+        simulation.status === 'pending' ? 'is-status-pending' : '',
       ]
         .filter(Boolean)
         .join(' ')}
-      title={`${nodeData.tag} · ${nodeData.label} · ${nodeData.cnLabel}\nF ${readoutValue(flow, 2)} t/h · T ${readoutValue(temperature, 1)} °C`}
+      title={`${nodeData.tag} · ${nodeData.label} · ${nodeData.cnLabel}\n状态 ${statusLabel}\nF ${readoutValue(flow, 2)} t/h · T ${readoutValue(temperature, 1)} °C`}
     >
       {canReceive && (
         <Handle
@@ -98,6 +113,11 @@ export function ProcessNode({ id, data, selected }: NodeProps) {
         <span className="process-node__tag">{nodeData.tag}</span>
         <span className="process-node__kind">
           {isStream ? `STREAM · ${stateLabel}` : kindMeta.code}
+          {status !== 'calculated' || simulation.status === 'pending' ? (
+            <em className={`process-node__status is-${status}`}>
+              {statusLabel}
+            </em>
+          ) : null}
         </span>
       </header>
 
@@ -115,7 +135,7 @@ export function ProcessNode({ id, data, selected }: NodeProps) {
         </span>
       </div>
 
-      <div className="process-node__readout" aria-label="当前计算工况">
+      <div className="process-node__readout" aria-label="Engine 计算工况">
         <span>
           <em>F</em>
           <b>{readoutValue(flow, 2)}</b>

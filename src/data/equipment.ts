@@ -10,6 +10,7 @@ export const EQUIPMENT_DEFINITIONS: Record<EquipmentKind, EquipmentDefinition> =
     name: 'Streams',
     cnName: '物流',
     description: '定义进料或产品物流工况',
+    calculationSupport: 'supported',
     category: 'stream',
     tagPrefix: 'F',
     defaultParams: {
@@ -24,6 +25,7 @@ export const EQUIPMENT_DEFINITIONS: Record<EquipmentKind, EquipmentDefinition> =
     name: 'Mixer',
     cnName: '混合器',
     description: '多股物流汇合与均匀混合',
+    calculationSupport: 'supported',
     category: 'unit',
     tagPrefix: 'MX',
     defaultParams: {
@@ -36,6 +38,7 @@ export const EQUIPMENT_DEFINITIONS: Record<EquipmentKind, EquipmentDefinition> =
     name: 'Heater',
     cnName: '加热器',
     description: '壳管式换热器，提升物流温度',
+    calculationSupport: 'supported',
     category: 'unit',
     tagPrefix: 'HX',
     defaultParams: {
@@ -48,6 +51,7 @@ export const EQUIPMENT_DEFINITIONS: Record<EquipmentKind, EquipmentDefinition> =
     name: 'Cooler',
     cnName: '冷却器',
     description: '循环水冷却，降低物流温度',
+    calculationSupport: 'supported',
     category: 'unit',
     tagPrefix: 'CL',
     defaultParams: {
@@ -59,7 +63,8 @@ export const EQUIPMENT_DEFINITIONS: Record<EquipmentKind, EquipmentDefinition> =
     kind: 'flash',
     name: 'Flash Drum',
     cnName: '闪蒸罐',
-    description: '气液闪蒸与相平衡分离',
+    description: '尚未实现闪蒸及汽液平衡计算',
+    calculationSupport: 'unsupported',
     category: 'unit',
     tagPrefix: 'V',
     defaultParams: {
@@ -72,7 +77,8 @@ export const EQUIPMENT_DEFINITIONS: Record<EquipmentKind, EquipmentDefinition> =
     kind: 'separator',
     name: 'Separator',
     cnName: '分离器',
-    description: '重力沉降两相分离设备',
+    description: '尚未实现分离计算',
+    calculationSupport: 'unsupported',
     category: 'unit',
     tagPrefix: 'SEP',
     defaultParams: {
@@ -85,7 +91,8 @@ export const EQUIPMENT_DEFINITIONS: Record<EquipmentKind, EquipmentDefinition> =
     kind: 'pump',
     name: 'Pump',
     cnName: '离心泵',
-    description: '提高物流压力，估算轴功率',
+    description: '尚未实现泵功率及压力提升计算',
+    calculationSupport: 'unsupported',
     category: 'unit',
     tagPrefix: 'P',
     defaultParams: {

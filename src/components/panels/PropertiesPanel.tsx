@@ -21,10 +21,12 @@ import type {
   EquipmentNodeData,
   ProcessEdge,
   ProcessNode,
-  SimulationResult,
   StreamRole,
-  StreamState,
 } from '../../types/process'
+import type {
+  UiSimulationView,
+  UiStreamState,
+} from '../../simulation'
 import {
   formatFlow,
   formatPercent,
@@ -146,6 +148,32 @@ function NumberField({
   )
 }
 
+function ReadonlyField({
+  label,
+  value,
+  unit,
+  digits = 2,
+}: {
+  label: string
+  value: number | null
+  unit: string
+  digits?: number
+}) {
+  const text =
+    value === null || !Number.isFinite(value)
+      ? '—'
+      : value.toFixed(digits)
+  return (
+    <div className="inspector-field is-readonly">
+      <label>{label}</label>
+      <div className="field-control">
+        <span className="field-value">{text}</span>
+        <span className="field-unit">{unit}</span>
+      </div>
+    </div>
+  )
+}
+
 function TextField({
   label,
   value,
@@ -230,39 +258,6 @@ function SectionTitle({
   )
 }
 
-function getInletState(
-  nodeId: string,
-  edges: ProcessEdge[],
-  simulation: SimulationResult,
-): StreamState {
-  const incoming = edges
-    .filter((edge) => edge.target === nodeId)
-    .map((edge) => simulation.edgeStreams[edge.id])
-    .filter((state): state is StreamState => Boolean(state))
-  const flow = incoming.reduce((total, state) => total + state.flow, 0)
-  if (flow <= 0) {
-    return {
-      flow: 0,
-      temperature: 25,
-      pressure: 1,
-      compositionA: 0,
-      compositionB: 100,
-    }
-  }
-  const weighted = (key: 'temperature' | 'pressure' | 'compositionA') =>
-    incoming.reduce(
-      (total, state) => total + state[key] * state.flow,
-      0,
-    ) / flow
-  return {
-    flow,
-    temperature: weighted('temperature'),
-    pressure: weighted('pressure'),
-    compositionA: weighted('compositionA'),
-    compositionB: 100 - weighted('compositionA'),
-  }
-}
-
 function CompositionBar({
   compositionA,
   compositionB,
@@ -290,22 +285,22 @@ function CompositionBar({
   )
 }
 
-function ComputedReadout({ state }: { state: StreamState }) {
+function ComputedReadout({ state }: { state: UiStreamState }) {
   return (
     <div className="computed-readout">
       <div>
         <span>流量 F</span>
-        <strong>{formatFlow(state.flow)}</strong>
+        <strong>{formatFlow(state.flowTph)}</strong>
         <small>t/h</small>
       </div>
       <div>
         <span>温度 T</span>
-        <strong>{formatTemperature(state.temperature)}</strong>
+        <strong>{formatTemperature(state.temperatureC)}</strong>
         <small>°C</small>
       </div>
       <div>
         <span>压力 P</span>
-        <strong>{formatPressure(state.pressure)}</strong>
+        <strong>{formatPressure(state.pressureBar)}</strong>
         <small>bar</small>
       </div>
     </div>
@@ -314,23 +309,20 @@ function ComputedReadout({ state }: { state: StreamState }) {
 
 function NodeParameters({
   node,
-  edges,
   simulation,
   onParams,
   onRole,
 }: {
   node: ProcessNode
-  edges: ProcessEdge[]
-  simulation: SimulationResult
+  simulation: UiSimulationView
   onParams: (patch: Record<string, number>) => void
   onRole: (role: StreamRole) => void
 }) {
   const data = node.data
-  const inlet = getInletState(node.id, edges, simulation)
-  const outlet = simulation.nodeOutputs[node.id]
-  const dutyRow = simulation.energyBalance.find(
-    (row) => row.nodeId === node.id,
-  )
+  const inlet = simulation.nodeInputs[node.id] ?? null
+  const outlet = simulation.nodeOutputs[node.id] ?? null
+  const equipment = simulation.equipment[node.id]
+  const dutyKW = equipment?.dutyKW ?? null
   const isStream = data.kind === 'stream'
   const role = data.role ?? 'feed'
 
@@ -392,38 +384,40 @@ function NodeParameters({
             />
             <div className="stream-note inspector-field--full">
               <Info size={11} strokeWidth={1.8} />
-              进料边界条件，仿真将由此向下游传播。
+              进料边界条件，Engine 将由此向下游传播。
             </div>
           </>
         ) : (
           <>
             <div className="field-ro-grid inspector-field--full">
-              <NumberField
+              <ReadonlyField
                 label="计算流量"
-                value={outlet?.flow ?? 0}
+                value={outlet?.flowTph ?? null}
                 unit="t/h"
               />
-              <NumberField
+              <ReadonlyField
                 label="计算温度"
-                value={outlet?.temperature ?? 0}
+                value={outlet?.temperatureC ?? null}
                 unit="°C"
                 digits={1}
               />
-              <NumberField
+              <ReadonlyField
                 label="计算压力"
-                value={outlet?.pressure ?? 0}
+                value={outlet?.pressureBar ?? null}
                 unit="bar"
               />
-              <NumberField
+              <ReadonlyField
                 label="A 组分"
-                value={outlet?.compositionA ?? 0}
+                value={outlet?.compositionAWt ?? null}
                 unit="wt%"
                 digits={1}
               />
             </div>
             <div className="stream-note inspector-field--full">
               <Info size={11} strokeWidth={1.8} />
-              工况由上游设备计算，修改设备参数后自动更新。
+              {outlet
+                ? '工况由 Engine 计算，修改上游参数后需重新运行。'
+                : '该物流尚无有效 Engine 结果，不显示替代数值。'}
             </div>
           </>
         )}
@@ -435,51 +429,50 @@ function NodeParameters({
     case 'mixer':
       return (
         <>
-          <NumberField
-            label="进料流量"
-            value={inlet.flow}
-            unit="t/h"
-          />
-          <NumberField
-            label="入口温度"
-            value={inlet.temperature}
-            unit="°C"
-            digits={1}
-          />
-          <NumberField
-            label="出口温度"
-            value={data.params.outletTemperature ?? 45}
-            unit="°C"
-            step={1}
-            onChange={(value) =>
-              onParams({ outletTemperature: value })
-            }
-          />
-          <NumberField
-            label="操作压力"
-            value={data.params.pressure ?? 2.5}
-            unit="bar"
-            min={0}
-            step={0.1}
-            onChange={(value) => onParams({ pressure: value })}
-          />
-          {dutyRow && (
-            <NumberField
-              label="热负荷"
-              value={dutyRow.duty}
-              unit="kW"
+          <div className="field-ro-grid inspector-field--full">
+            <ReadonlyField
+              label="入口流量"
+              value={inlet?.flowTph ?? null}
+              unit="t/h"
+            />
+            <ReadonlyField
+              label="入口温度"
+              value={inlet?.temperatureC ?? null}
+              unit="°C"
               digits={1}
             />
-          )}
+            <ReadonlyField
+              label="出口温度"
+              value={outlet?.temperatureC ?? null}
+              unit="°C"
+              digits={1}
+            />
+            <ReadonlyField
+              label="出口压力"
+              value={outlet?.pressureBar ?? null}
+              unit="bar"
+            />
+          </div>
+          <ReadonlyField
+            label="热负荷"
+            value={dutyKW}
+            unit="kW"
+            digits={1}
+          />
+          <div className="stream-note inspector-field--full">
+            <Info size={11} strokeWidth={1.8} />
+            绝热混合：出口温度由 Engine 根据入口 Cp 计算，热负荷为 0；
+            出口压力取所有入口压力的最小值。
+          </div>
         </>
       )
     case 'heater':
     case 'cooler':
       return (
         <>
-          <NumberField
+          <ReadonlyField
             label="入口温度"
-            value={inlet.temperature}
+            value={inlet?.temperatureC ?? null}
             unit="°C"
             digits={1}
           />
@@ -492,129 +485,119 @@ function NodeParameters({
               onParams({ targetTemperature: value })
             }
           />
-          <NumberField
-            label="操作压力"
-            value={data.params.pressure ?? 2.4}
+          <ReadonlyField
+            label="出口压力"
+            value={outlet?.pressureBar ?? null}
             unit="bar"
-            min={0}
-            step={0.1}
-            onChange={(value) => onParams({ pressure: value })}
           />
-          <NumberField
+          <ReadonlyField
             label={
               data.kind === 'heater' ? '计算热负荷' : '计算冷负荷'
             }
-            value={dutyRow?.duty ?? 0}
+            value={dutyKW}
             unit="kW"
             digits={1}
           />
+          <div className="stream-note inspector-field--full">
+            <Info size={11} strokeWidth={1.8} />
+            目标温度模式；Engine 按常数 Cp 计算热负荷，出口压力按入口压力处理。
+          </div>
         </>
       )
     case 'flash':
       return (
         <>
-          <NumberField
+          <ReadonlyField
             label="操作温度"
-            value={data.params.temperature ?? 60}
+            value={data.params.temperature ?? null}
             unit="°C"
-            step={1}
-            onChange={(value) => onParams({ temperature: value })}
+            digits={1}
           />
-          <NumberField
+          <ReadonlyField
             label="操作压力"
-            value={data.params.pressure ?? 1.2}
+            value={data.params.pressure ?? null}
             unit="bar"
-            min={0.05}
-            step={0.05}
-            onChange={(value) => onParams({ pressure: value })}
           />
-          <NumberField
+          <ReadonlyField
             label="汽化率"
-            value={data.params.vaporFraction ?? 18}
+            value={data.params.vaporFraction ?? null}
             unit="%"
-            min={0}
-            max={100}
-            step={1}
-            onChange={(value) =>
-              onParams({ vaporFraction: value })
-            }
+            digits={1}
           />
-          <NumberField
+          <ReadonlyField
             label="进料流量"
-            value={inlet.flow}
+            value={inlet?.flowTph ?? null}
             unit="t/h"
           />
+          <div className="stream-note inspector-field--full">
+            <Info size={11} strokeWidth={1.8} />
+            P2.3 Engine 尚未支持闪蒸相平衡；运行结果会明确标记为
+            unsupported，参数不会产生伪造结果。
+          </div>
         </>
       )
     case 'separator':
       return (
         <>
-          <NumberField
+          <ReadonlyField
             label="操作温度"
-            value={data.params.temperature ?? 50}
+            value={data.params.temperature ?? null}
             unit="°C"
-            step={1}
-            onChange={(value) => onParams({ temperature: value })}
+            digits={1}
           />
-          <NumberField
+          <ReadonlyField
             label="操作压力"
-            value={data.params.pressure ?? 1.5}
+            value={data.params.pressure ?? null}
             unit="bar"
-            min={0.05}
-            step={0.05}
-            onChange={(value) => onParams({ pressure: value })}
           />
-          <NumberField
+          <ReadonlyField
             label="液相分率"
-            value={data.params.splitRatio ?? 55}
+            value={data.params.splitRatio ?? null}
             unit="%"
-            min={0}
-            max={100}
-            step={1}
-            onChange={(value) => onParams({ splitRatio: value })}
+            digits={1}
           />
-          <NumberField
+          <ReadonlyField
             label="进料流量"
-            value={inlet.flow}
+            value={inlet?.flowTph ?? null}
             unit="t/h"
           />
+          <div className="stream-note inspector-field--full">
+            <Info size={11} strokeWidth={1.8} />
+            P2.3 Engine 尚未支持分离计算；运行结果会明确标记为
+            unsupported，不显示虚构出口。
+          </div>
         </>
       )
     case 'pump':
       return (
         <>
-          <NumberField
+          <ReadonlyField
             label="入口压力"
-            value={inlet.pressure}
+            value={inlet?.pressureBar ?? null}
             unit="bar"
           />
-          <NumberField
-            label="出口压力"
-            value={data.params.outletPressure ?? 4}
+          <ReadonlyField
+            label="目标出口压力"
+            value={data.params.outletPressure ?? null}
             unit="bar"
-            min={0}
-            step={0.1}
-            onChange={(value) =>
-              onParams({ outletPressure: value })
-            }
           />
-          <NumberField
+          <ReadonlyField
             label="泵效率"
-            value={data.params.efficiency ?? 70}
+            value={data.params.efficiency ?? null}
             unit="%"
-            min={5}
-            max={100}
-            step={1}
-            onChange={(value) =>
-              onParams({ efficiency: value })
-            }
+            digits={1}
           />
-          <NumberField
-            label="轴功率估算"
-            value={dutyRow?.duty ?? 0}
+          <ReadonlyField
+            label="轴功率"
+            value={dutyKW}
             unit="kW"
             digits={2}
           />
+          <div className="stream-note inspector-field--full">
+            <Info size={11} strokeWidth={1.8} />
+            P2.3 Engine 尚未支持泵计算；运行结果会明确标记为
+            unsupported，参数不会产生伪造结果。
+          </div>
         </>
       )
     default:
@@ -629,7 +612,7 @@ function FlowSheetOverview({
   onSelectNode,
 }: {
   nodes: ProcessNode[]
-  simulation: SimulationResult
+  simulation: UiSimulationView
   savedAt: string | null
   onSelectNode: (id: string) => void
 }) {
@@ -649,8 +632,8 @@ function FlowSheetOverview({
             <strong>{simulation.summary.streamCount}</strong>
           </div>
           <div>
-            <span>设备</span>
-            <strong>{nodes.length}</strong>
+            <span>状态</span>
+            <strong>{simulation.status.toUpperCase()}</strong>
           </div>
         </div>
       </div>
@@ -693,8 +676,8 @@ function FlowSheetOverview({
       <div className="teaching-note">
         <Info size={13} strokeWidth={1.8} />
         <p>
-          本工作台使用简化的质量与能量衡算模型演示流程搭建和参数联动，
-          <strong>不代表真实热力学或工程设计结果</strong>。
+          本工作台使用 Engine 执行稳态质量与常数 Cp 能量衡算。
+          <strong>Teaching Binary Fluid 为假想教学物性，不代表真实化学物质或工程结果</strong>。
         </p>
       </div>
 
@@ -716,7 +699,7 @@ function ConnectionList({
   nodeId: string
   nodes: ProcessNode[]
   edges: ProcessEdge[]
-  simulation: SimulationResult
+  simulation: UiSimulationView
   onSelectEdge: (id: string) => void
 }) {
   const nodeById = new Map(nodes.map((node) => [node.id, node]))
@@ -727,6 +710,8 @@ function ConnectionList({
     const otherId = direction === 'in' ? edge.source : edge.target
     const other = nodeById.get(otherId)
     const stream = simulation.edgeStreams[edge.id]
+    const streamStatus =
+      simulation.streams[edge.id]?.status ?? 'unavailable'
     return (
       <button
         key={edge.id}
@@ -747,8 +732,15 @@ function ConnectionList({
           </span>
         </span>
         <span className="connection-item__value">
-          {formatFlow(stream?.flow ?? 0)}{' '}
-          <small>t/h</small>
+          {stream ? (
+            <>
+              {formatFlow(stream.flowTph)} <small>t/h</small>
+            </>
+          ) : (
+            <small className={`connection-item__state is-${streamStatus}`}>
+              {streamStatus.toUpperCase()}
+            </small>
+          )}
         </span>
         <ChevronRight size={11} strokeWidth={1.7} />
       </button>
@@ -788,7 +780,7 @@ interface PropertiesPanelProps {
   selectedEdge: ProcessEdge | null
   nodes: ProcessNode[]
   edges: ProcessEdge[]
-  simulation: SimulationResult
+  simulation: UiSimulationView
   savedAt: string | null
   onSelectNode: (id: string) => void
   onSelectEdge: (id: string) => void
@@ -832,10 +824,21 @@ export function PropertiesPanel({
       : 'FLOWSHEET'
 
   const nodeWarnings = selectedNode
-    ? simulation.warnings.filter((warning) =>
-        warning.includes(selectedNode.data.tag),
+    ? simulation.diagnostics.filter(
+        (diagnostic) =>
+          diagnostic.scope.type === 'node' &&
+          diagnostic.scope.nodeId === selectedNode.id,
       )
     : []
+  const selectedEquipment = selectedNode
+    ? simulation.equipment[selectedNode.id]
+    : undefined
+  const selectedEdgeResult = selectedEdge
+    ? simulation.streams[selectedEdge.id]
+    : undefined
+  const selectedEdgeStream = selectedEdge
+    ? simulation.edgeStreams[selectedEdge.id]
+    : undefined
 
   return (
     <aside className="properties-panel" aria-label="属性面板">
@@ -899,10 +902,23 @@ export function PropertiesPanel({
               />
             </div>
 
-            {nodeWarnings.length > 0 && (
+            {selectedEquipment &&
+              selectedEquipment.status !== 'calculated' && (
+                <div className="inspector-warning">
+                  <AlertTriangle size={12} strokeWidth={1.9} />
+                  <span>
+                    Engine 状态：{selectedEquipment.status.toUpperCase()}
+                    {nodeWarnings[0]
+                      ? ` · ${nodeWarnings[0].message}`
+                      : ''}
+                  </span>
+                </div>
+              )}
+
+            {!selectedEquipment && nodeWarnings.length > 0 && (
               <div className="inspector-warning">
                 <AlertTriangle size={12} strokeWidth={1.9} />
-                <span>{nodeWarnings[0]}</span>
+                <span>{nodeWarnings[0].message}</span>
               </div>
             )}
 
@@ -914,7 +930,6 @@ export function PropertiesPanel({
             <div className="inspector-fields">
               <NodeParameters
                 node={selectedNode}
-                edges={edges}
                 simulation={simulation}
                 onParams={(patch) =>
                   onUpdateParams(selectedNode.id, patch)
@@ -930,7 +945,7 @@ export function PropertiesPanel({
                 <SectionTitle
                   index="02"
                   title="计算工况"
-                  en="SIMULATED OUTLET"
+                  en="ENGINE OUTLET"
                 />
                 <ComputedReadout
                   state={simulation.nodeOutputs[selectedNode.id]}
@@ -938,10 +953,10 @@ export function PropertiesPanel({
                 {selectedNode.data.kind === 'stream' && (
                   <CompositionBar
                     compositionA={
-                      simulation.nodeOutputs[selectedNode.id].compositionA
+                      simulation.nodeOutputs[selectedNode.id].compositionAWt
                     }
                     compositionB={
-                      simulation.nodeOutputs[selectedNode.id].compositionB
+                      simulation.nodeOutputs[selectedNode.id].compositionBWt
                     }
                   />
                 )}
@@ -1041,32 +1056,28 @@ export function PropertiesPanel({
               title="计算工况"
               en="SIMULATED CONDITIONS"
             />
-            {simulation.edgeStreams[selectedEdge.id] ? (
+            {selectedEdgeStream ? (
               <>
-                <ComputedReadout
-                  state={simulation.edgeStreams[selectedEdge.id]}
-                />
+                <ComputedReadout state={selectedEdgeStream} />
                 <CompositionBar
-                  compositionA={
-                    simulation.edgeStreams[selectedEdge.id]
-                      .compositionA
-                  }
-                  compositionB={
-                    simulation.edgeStreams[selectedEdge.id]
-                      .compositionB
-                  }
+                  compositionA={selectedEdgeStream.compositionAWt}
+                  compositionB={selectedEdgeStream.compositionBWt}
                 />
               </>
             ) : (
               <div className="stream-note">
                 <Info size={11} strokeWidth={1.8} />
-                该物流尚未参与计算。
+                该物流没有有效 Engine 结果
+                {selectedEdgeResult
+                  ? `（${selectedEdgeResult.status.toUpperCase()}）`
+                  : ''}
+                ，不显示替代数值。
               </div>
             )}
 
             <div className="stream-note stream-note--muted">
               <SlidersHorizontal size={11} strokeWidth={1.8} />
-              物流工况由上游设备计算，修改上游参数后自动更新。
+              物流工况由 Engine 计算，修改上游参数后需重新运行。
             </div>
 
             <div className="inspector-actions">
@@ -1085,7 +1096,7 @@ export function PropertiesPanel({
 
       <footer className="inspector-foot">
         <span className="inspector-foot__dot" />
-        SIMULATED DATA · 教学演示数据
+        BASIC TEACHING MODEL · ENGINE {simulation.modelVersion ?? ''}
       </footer>
     </aside>
   )

@@ -20,6 +20,9 @@ function PaletteItem({
   definition: EquipmentDefinition
   onAdd: (kind: EquipmentKind) => void
 }) {
+  const unsupported = definition.calculationSupport === 'unsupported'
+  const supportLabel = unsupported ? '未支持 · 仅占位' : 'Engine 已支持'
+
   const handleDragStart = (event: DragEvent<HTMLButtonElement>) => {
     event.dataTransfer.setData(EQUIPMENT_DRAG_MIME, definition.kind)
     event.dataTransfer.setData('text/plain', definition.kind)
@@ -29,11 +32,12 @@ function PaletteItem({
   return (
     <button
       type="button"
-      className="palette-item"
+      className={`palette-item${unsupported ? ' is-unsupported' : ''}`}
       draggable
       onDragStart={handleDragStart}
       onClick={() => onAdd(definition.kind)}
-      title={`${definition.name} · ${definition.description}`}
+      title={`${definition.name} · ${supportLabel} · ${definition.description}`}
+      aria-label={`${definition.name}，${supportLabel}，${definition.description}`}
     >
       <span className="palette-item__glyph">
         <EquipmentGlyph kind={definition.kind} />
@@ -42,6 +46,9 @@ function PaletteItem({
         <span className="palette-item__name">
           {definition.name}
           <span>{definition.cnName}</span>
+          {unsupported && (
+            <em className="palette-item__status">未支持</em>
+          )}
         </span>
         <span className="palette-item__desc">{definition.description}</span>
       </span>
@@ -158,7 +165,7 @@ export function EquipmentPalette({ onAdd }: EquipmentPaletteProps) {
         <GripVertical size={13} strokeWidth={1.7} aria-hidden="true" />
         <span>
           拖拽设备至画布
-          <em>或单击快速添加</em>
+          <em>未支持设备仅作占位</em>
         </span>
       </div>
     </aside>

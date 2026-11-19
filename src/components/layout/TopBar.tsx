@@ -143,11 +143,11 @@ export function TopBar({
         </button>
 
         <span
-          className="demo-badge"
-          title="教学演示环境：结果为简化模型生成的模拟数据"
+          className="engine-badge"
+          title="真实计算引擎：Teaching Binary Fluid 假想教学模型"
         >
-          <span className="demo-badge__dot" aria-hidden="true" />
-          DEMO
+          <span className="engine-badge__dot" aria-hidden="true" />
+          ENGINE
         </span>
 
         <button
@@ -155,7 +155,7 @@ export function TopBar({
           className="btn btn--run"
           onClick={onRun}
           disabled={isRunning}
-          title="运行前端演示计算"
+          title="运行独立 Engine 计算"
         >
           {isRunning ? (
             <Loader2
@@ -175,7 +175,7 @@ export function TopBar({
         <button
           type="button"
           className="user-chip"
-          title="教学账户 · DEMO"
+          title="教学账户 · ENGINE"
           aria-label="账户"
         >
           <span className="user-avatar">ST</span>

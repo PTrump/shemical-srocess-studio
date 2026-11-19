@@ -34,11 +34,15 @@ export interface StreamEdgeData extends Record<string, unknown> {
 
 export type ProcessEdge = Edge<StreamEdgeData, 'process'>
 
+export type EquipmentCalculationSupport = 'supported' | 'unsupported'
+
 export interface EquipmentDefinition {
   kind: EquipmentKind
   name: string
   cnName: string
   description: string
+  /** Whether the current Engine can produce a real calculation for this kind. */
+  calculationSupport: EquipmentCalculationSupport
   category: PaletteCategory
   tagPrefix: string
   defaultParams: ProcessParams

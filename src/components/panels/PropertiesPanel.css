@@ -839,6 +839,32 @@
   font-weight: 500;
 }
 
+.connection-item__state {
+  padding: 1px 3px;
+  border: 1px solid #d9e2e9;
+  border-radius: 2px;
+  background: #f5f8fa;
+  color: #708494;
+  font-family: var(--mono);
+  font-size: 5.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.connection-item__state.is-blocked,
+.connection-item__state.is-invalid {
+  border-color: #eccfcb;
+  background: #fdf4f3;
+  color: var(--danger);
+}
+
+.connection-item__state.is-unsupported,
+.connection-item__state.is-unavailable {
+  border-color: #e3d9ca;
+  background: #faf8f3;
+  color: #8a704b;
+}
+
 .connection-item > svg {
   flex: 0 0 auto;
   color: var(--muted-2);

@@ -18,10 +18,16 @@ import {
 } from 'lucide-react'
 import { KIND_META } from '../../data/equipment'
 import type {
-  ChartPoint,
-  MaterialBalanceRow,
-  SimulationResult,
-} from '../../types/process'
+  ComparisonMetric,
+  EngineRunOutcome,
+  RunComparison,
+  UiChartPoint,
+  UiEnergyRow,
+  UiMaterialRow,
+  UiSimulationView,
+} from '../../simulation'
+import { displayTraceValue } from '../../simulation'
+import type { CalculationTrace } from '../../engine'
 import {
   formatClock,
   formatDuty,
@@ -43,27 +49,206 @@ echarts.use([
   CanvasRenderer,
 ])
 
-type ResultsTab = 'summary' | 'material' | 'energy' | 'charts'
+type ResultsTab =
+  | 'summary'
+  | 'material'
+  | 'energy'
+  | 'charts'
+  | 'compare'
+  | 'trace'
 
 const TABS: Array<{ id: ResultsTab; label: string; en: string }> = [
   { id: 'summary', label: '概要', en: 'SUMMARY' },
   { id: 'material', label: '物料平衡', en: 'MATERIAL' },
   { id: 'energy', label: '能量平衡', en: 'ENERGY' },
   { id: 'charts', label: '图表', en: 'CHARTS' },
+  { id: 'compare', label: '对比', en: 'COMPARE' },
+  { id: 'trace', label: '计算详情', en: 'TRACE' },
 ]
 
+const STATUS_TEXT: Record<string, string> = {
+  pending: '等待运行',
+  success: '计算成功',
+  partial: '部分结果',
+  failed: '计算失败',
+}
+
 interface ResultsPanelProps {
-  simulation: SimulationResult
+  simulation: UiSimulationView
   collapsed: boolean
   running: boolean
   isStale: boolean
   lastRunAt: number | null
+  comparison: RunComparison | null
+  history: EngineRunOutcome | null
   onToggleCollapsed: () => void
 }
 
-function SummaryView({ simulation }: { simulation: SimulationResult }) {
-  const { summary, warnings, model } = simulation
-  const warningTitle = warnings.join('\n')
+function nullable(
+  value: number | null,
+  formatter: (number: number) => string,
+): string {
+  return value === null || !Number.isFinite(value) ? '—' : formatter(value)
+}
+
+function statusLabel(status: string): string {
+  return STATUS_TEXT[status] ?? status
+}
+
+function DiagnosticsStrip({ simulation }: { simulation: UiSimulationView }) {
+  if (simulation.diagnostics.length === 0) {
+    return null
+  }
+  const errors = simulation.diagnostics.filter(
+    (diagnostic) => diagnostic.severity === 'error',
+  )
+  const primary = errors[0] ?? simulation.diagnostics[0]
+  return (
+    <div
+      className={`results-diagnostics-strip${errors.length > 0 ? ' is-error' : ''}`}
+      title={simulation.diagnostics
+        .map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`)
+        .join('\n')}
+    >
+      <AlertTriangle size={11} strokeWidth={1.9} />
+      <span>
+        {errors.length > 0 ? `${errors.length} 个错误` : '模型提示'} ·{' '}
+        {primary.message}
+      </span>
+      {simulation.diagnostics.length > 1 && (
+        <b>+{simulation.diagnostics.length - 1}</b>
+      )}
+    </div>
+  )
+}
+
+function HistoryReference({ history }: { history: EngineRunOutcome }) {
+  const { summary } = history.view
+  return (
+    <div className="history-reference">
+      <div className="history-reference__head">
+        <span>上次成功结果</span>
+        <em>
+          {history.view.executedAt
+            ? formatClock(history.view.executedAt)
+            : '历史运行'}
+        </em>
+      </div>
+      <div className="history-reference__values">
+        <span>
+          进料 <b>{nullable(summary.totalFeedTph, formatFlow)}</b> t/h
+        </span>
+        <span>
+          产品 <b>{nullable(summary.productFlowTph, formatFlow)}</b> t/h
+        </span>
+        <span>
+          出口 <b>{nullable(summary.outletTemperatureC, formatTemperature)}</b> °C
+        </span>
+        <span>
+          净热负荷 <b>{nullable(summary.netDutyKW, formatDuty)}</b> kW
+        </span>
+        <span>
+          闭合{' '}
+          <b>
+            {nullable(summary.massClosure, formatPercent)} %
+          </b>
+        </span>
+      </div>
+      <p>本次运行失败；以上是历史参考，不代表当前流程或本次运行结果。</p>
+    </div>
+  )
+}
+
+function FailureView({
+  simulation,
+  history,
+}: {
+  simulation: UiSimulationView
+  history: EngineRunOutcome | null
+}) {
+  const errors = simulation.diagnostics.filter(
+    (diagnostic) => diagnostic.severity === 'error',
+  )
+  return (
+    <div className="result-state">
+      <div className="result-state__head">
+        <span className="result-state__glyph is-error">
+          <AlertTriangle size={16} strokeWidth={1.8} />
+        </span>
+        <div>
+          <h3>Engine 计算失败</h3>
+          <p>
+            本次运行未生成成功 KPI。请修正诊断后重新运行；历史结果会保留并明确标注。
+          </p>
+        </div>
+      </div>
+      <div className="diagnostic-list">
+        {(errors.length > 0 ? errors : simulation.diagnostics).map(
+          (diagnostic, index) => (
+            <div
+              className={`diagnostic-item is-${diagnostic.severity}`}
+              key={`${diagnostic.code}-${index}`}
+            >
+              <span className="diagnostic-item__code">
+                {diagnostic.code}
+              </span>
+              <span className="diagnostic-item__message">
+                {diagnostic.message}
+              </span>
+              {diagnostic.scope.type === 'node' && (
+                <span className="diagnostic-item__scope">
+                  {diagnostic.scope.nodeId}
+                </span>
+              )}
+              {diagnostic.scope.type === 'edge' && (
+                <span className="diagnostic-item__scope">
+                  {diagnostic.scope.edgeId}
+                </span>
+              )}
+            </div>
+          ),
+        )}
+      </div>
+      {history && <HistoryReference history={history} />}
+    </div>
+  )
+}
+
+function PendingView() {
+  return (
+    <div className="result-state">
+      <div className="result-state__head">
+        <span className="result-state__glyph">
+          <Info size={16} strokeWidth={1.8} />
+        </span>
+        <div>
+          <h3>等待 Engine 计算</h3>
+          <p>编辑流程后点击右上角“运行仿真”，结果只来自本次 Engine 运行。</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SummaryView({
+  simulation,
+  history,
+}: {
+  simulation: UiSimulationView
+  history: EngineRunOutcome | null
+}) {
+  if (simulation.status === 'pending') {
+    return <PendingView />
+  }
+  if (simulation.status === 'failed') {
+    return <FailureView simulation={simulation} history={history} />
+  }
+
+  const { summary, balances } = simulation
+  const massClosure = summary.massClosure
+  const energyTotal =
+    (summary.heatingDutyKW ?? 0) + (summary.coolingDutyKW ?? 0)
+  const balanceAvailable = balances.status === 'calculated'
 
   return (
     <div className="summary-view">
@@ -74,11 +259,12 @@ function SummaryView({ simulation }: { simulation: SimulationResult }) {
             <em>TOTAL FEED</em>
           </div>
           <div className="kpi-card__value">
-            <strong>{formatNumber(summary.totalFeed, 2, false)}</strong>
+            <strong>{nullable(summary.totalFeedTph, formatFlow)}</strong>
             <span>t/h</span>
           </div>
           <p>
-            {summary.feedCount} 股进料 · 产品 {formatFlow(summary.productFlow)} t/h
+            {summary.feedCount} 股进料 · 产品{' '}
+            {nullable(summary.productFlowTph, formatFlow)} t/h
           </p>
         </article>
 
@@ -89,11 +275,15 @@ function SummaryView({ simulation }: { simulation: SimulationResult }) {
           </div>
           <div className="kpi-card__value">
             <strong>
-              {formatNumber(summary.outletTemperature, 1, false)}
+              {nullable(summary.outletTemperatureC, (value) =>
+                formatNumber(value, 1, false),
+              )}
             </strong>
             <span>°C</span>
           </div>
-          <p>进料加权温度 {formatTemperature(summary.feedTemperature)} °C</p>
+          <p>
+            进料加权温度 {nullable(summary.feedTemperatureC, formatTemperature)} °C
+          </p>
         </article>
 
         <article className="kpi-card kpi-card--amber">
@@ -102,12 +292,16 @@ function SummaryView({ simulation }: { simulation: SimulationResult }) {
             <em>NET DUTY</em>
           </div>
           <div className="kpi-card__value">
-            <strong>{formatNumber(summary.netDuty, 1, false)}</strong>
+            <strong>
+              {nullable(summary.netDutyKW, (value) =>
+                formatNumber(value, 1, false),
+              )}
+            </strong>
             <span>kW</span>
           </div>
           <p>
-            加热 {formatDuty(summary.heatingDuty)} · 冷却{' '}
-            {formatDuty(summary.coolingDuty)} kW
+            加热 {nullable(summary.heatingDutyKW, formatDuty)} · 冷却{' '}
+            {nullable(summary.coolingDutyKW, formatDuty)} kW
           </p>
         </article>
 
@@ -117,13 +311,15 @@ function SummaryView({ simulation }: { simulation: SimulationResult }) {
             <em>MASS CLOSURE</em>
           </div>
           <div className="kpi-card__value">
-            <strong>
-              {formatNumber(summary.massClosure, 1, false)}
-            </strong>
+            <strong>{nullable(massClosure, (value) =>
+              formatNumber(value, 1, false),
+            )}</strong>
             <span>%</span>
           </div>
           <p>
-            {summary.productCount} 股产品 · {summary.streamCount} 条物流
+            {!balanceAvailable
+              ? '平衡结果不可用'
+              : `${summary.productCount} 股产品 · ${summary.streamCount} 条物流`}
           </p>
         </article>
       </div>
@@ -137,19 +333,27 @@ function SummaryView({ simulation }: { simulation: SimulationResult }) {
           <div className="summary-detail__bar">
             <i
               className="is-mass"
-              style={{ width: `${Math.min(100, summary.massClosure)}%` }}
+              style={{
+                width: `${massClosure === null ? 0 : Math.min(100, Math.max(0, massClosure))}%`,
+              }}
             />
           </div>
           <div className="summary-detail__line">
-            <span>
-              进料 <b>{formatFlow(summary.totalFeed)}</b> t/h
-            </span>
-            <span>
-              产品 <b>{formatFlow(summary.productFlow)}</b> t/h
-            </span>
-            <span>
-              闭合 <b>{formatPercent(summary.massClosure)}</b> %
-            </span>
+            {balanceAvailable ? (
+              <>
+                <span>
+                  进料 <b>{nullable(summary.totalFeedTph, formatFlow)}</b> t/h
+                </span>
+                <span>
+                  产品 <b>{nullable(summary.productFlowTph, formatFlow)}</b> t/h
+                </span>
+                <span>
+                  闭合 <b>{nullable(massClosure, formatPercent)}</b> %
+                </span>
+              </>
+            ) : (
+              <span>平衡结果不可用，不显示零值。</span>
+            )}
           </div>
         </div>
 
@@ -162,69 +366,75 @@ function SummaryView({ simulation }: { simulation: SimulationResult }) {
             <i
               className="is-heating"
               style={{
-                width: `${summary.heatingDuty + summary.coolingDuty > 0 ? (summary.heatingDuty / (summary.heatingDuty + summary.coolingDuty)) * 100 : 0}%`,
+                width: `${
+                  summary.heatingDutyKW === null ||
+                  summary.coolingDutyKW === null ||
+                  energyTotal <= 0
+                    ? 0
+                    : (summary.heatingDutyKW / energyTotal) * 100
+                }%`,
               }}
             />
             <i
               className="is-cooling"
               style={{
-                width: `${summary.heatingDuty + summary.coolingDuty > 0 ? (summary.coolingDuty / (summary.heatingDuty + summary.coolingDuty)) * 100 : 0}%`,
+                width: `${
+                  summary.heatingDutyKW === null ||
+                  summary.coolingDutyKW === null ||
+                  energyTotal <= 0
+                    ? 0
+                    : (summary.coolingDutyKW / energyTotal) * 100
+                }%`,
               }}
             />
           </div>
           <div className="summary-detail__line">
             <span>
-              加热 <b>{formatDuty(summary.heatingDuty)}</b> kW
+              加热 <b>{nullable(summary.heatingDutyKW, formatDuty)}</b> kW
             </span>
             <span>
-              冷却 <b>{formatDuty(summary.coolingDuty)}</b> kW
+              冷却 <b>{nullable(summary.coolingDutyKW, formatDuty)}</b> kW
             </span>
           </div>
         </div>
 
         <div className="summary-detail">
           <div className="summary-detail__head">
-            <span>模型常数</span>
-            <em>MODEL CONSTANTS</em>
+            <span>计算模型</span>
+            <em>MODEL</em>
           </div>
           <div className="summary-detail__chips">
-            <span>Cp {model.cp} kJ/kg·K</span>
-            <span>ρ {model.density} kg/m³</span>
-            <span>η {formatPercent(model.pumpEfficiency * 100)}%</span>
+            <span>Cp {simulation.heatCapacityKJPerKgK} kJ/kg·K</span>
+            <span>{simulation.propertyPackageName}</span>
+            <span>{simulation.modelVersion ?? '—'}</span>
           </div>
           <div className="summary-detail__line">
-            <span>简化为稳态、绝热单元与单次通过模型</span>
+            <span>假想教学组分 · 稳态 · 单相 · 常数 Cp</span>
           </div>
         </div>
       </div>
 
+      <DiagnosticsStrip simulation={simulation} />
+
       <div className="summary-note">
         <span className="summary-note__disclaimer">
           <Info size={11} strokeWidth={1.8} />
-          教学演示数据，由简化模型生成（Cp={model.cp} kJ/(kg·K)），非真实热力学计算。
+          BASIC TEACHING MODEL · 假想教学物性与常数 Cp，非工业或真实工艺预测。
         </span>
-        {warnings.length > 0 && (
-          <span className="summary-note__warning" title={warningTitle}>
-            <AlertTriangle size={11} strokeWidth={1.9} />
-            {warnings.length} 条模型提示
-          </span>
-        )}
+        <span className="summary-note__engine">
+          {simulation.runId ? `RUN ${simulation.runId}` : '未运行'}
+        </span>
       </div>
     </div>
   )
 }
 
-function StreamCell({ row }: { row: MaterialBalanceRow }) {
-  return (
-    <div className="stream-cell">
-      <span className="stream-tag">{row.tag}</span>
-      <span className="stream-name">{row.name}</span>
-    </div>
-  )
+function statusChip(status: string): string {
+  return status === 'calculated' ? 'CALC' : status.toUpperCase()
 }
 
-function MaterialView({ simulation }: { simulation: SimulationResult }) {
-  const { materialBalance, summary } = simulation
+function MaterialView({ simulation }: { simulation: UiSimulationView }) {
+  const { materialRows, balances } = simulation
 
   return (
     <div className="balance-view">
@@ -235,19 +445,25 @@ function MaterialView({ simulation }: { simulation: SimulationResult }) {
         </div>
         <div className="balance-chips">
           <span>
-            进料 <b>{formatFlow(summary.totalFeed)}</b> t/h
+            进料 <b>{nullable(balances.totalFeedTph, formatFlow)}</b> t/h
           </span>
           <span>
-            产品 <b>{formatFlow(summary.productFlow)}</b> t/h
+            产品 <b>{nullable(balances.totalProductTph, formatFlow)}</b> t/h
           </span>
           <span>
-            闭合 <b>{formatPercent(summary.massClosure)}</b> %
+            闭合 <b>{nullable(balances.closurePercent, formatPercent)}</b> %
           </span>
         </div>
       </div>
 
+      {balances.status === 'unavailable' && (
+        <div className="balance-unavailable">
+          平衡结果不可用：未完整计算、存在阻塞物流，或聚合结果超出数值范围。
+        </div>
+      )}
+
       <div className="data-table-wrap">
-        {materialBalance.length === 0 ? (
+        {materialRows.length === 0 ? (
           <div className="results-empty">连接设备后显示物料平衡数据。</div>
         ) : (
           <table className="data-table">
@@ -263,8 +479,11 @@ function MaterialView({ simulation }: { simulation: SimulationResult }) {
               </tr>
             </thead>
             <tbody>
-              {materialBalance.map((row) => (
-                <tr key={row.edgeId}>
+              {materialRows.map((row: UiMaterialRow) => (
+                <tr
+                  key={row.edgeId}
+                  className={row.status === 'calculated' ? '' : 'is-blocked'}
+                >
                   <td>
                     <StreamCell row={row} />
                   </td>
@@ -277,17 +496,18 @@ function MaterialView({ simulation }: { simulation: SimulationResult }) {
                     {row.to}
                   </td>
                   <td className="is-num is-strong">
-                    {formatFlow(row.stream.flow)}
+                    {row.stream ? formatFlow(row.stream.flowTph) : '—'}
                   </td>
                   <td className="is-num">
-                    {formatTemperature(row.stream.temperature)}
+                    {row.stream ? formatTemperature(row.stream.temperatureC) : '—'}
                   </td>
                   <td className="is-num">
-                    {formatPressure(row.stream.pressure)}
+                    {row.stream ? formatPressure(row.stream.pressureBar) : '—'}
                   </td>
                   <td className="is-num is-muted">
-                    {formatPercent(row.stream.compositionA)} /{' '}
-                    {formatPercent(row.stream.compositionB)}
+                    {row.stream
+                      ? `${formatPercent(row.stream.compositionAWt)} / ${formatPercent(row.stream.compositionBWt)}`
+                      : '— / —'}
                   </td>
                 </tr>
               ))}
@@ -299,8 +519,22 @@ function MaterialView({ simulation }: { simulation: SimulationResult }) {
   )
 }
 
-function EnergyView({ simulation }: { simulation: SimulationResult }) {
-  const { energyBalance, summary } = simulation
+function StreamCell({ row }: { row: UiMaterialRow }) {
+  return (
+    <div className="stream-cell">
+      <span className="stream-tag">{row.tag}</span>
+      <span className="stream-name">{row.name}</span>
+      {row.status !== 'calculated' && (
+        <span className={`stream-status is-${row.status}`}>
+          {statusChip(row.status)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function EnergyView({ simulation }: { simulation: UiSimulationView }) {
+  const { energyRows, summary } = simulation
 
   return (
     <div className="balance-view">
@@ -312,19 +546,19 @@ function EnergyView({ simulation }: { simulation: SimulationResult }) {
         </div>
         <div className="balance-chips">
           <span>
-            加热 <b>{formatDuty(summary.heatingDuty)}</b> kW
+            加热 <b>{nullable(summary.heatingDutyKW, formatDuty)}</b> kW
           </span>
           <span>
-            冷却 <b>{formatDuty(summary.coolingDuty)}</b> kW
+            冷却 <b>{nullable(summary.coolingDutyKW, formatDuty)}</b> kW
           </span>
           <span>
-            净值 <b>{formatDuty(summary.netDuty)}</b> kW
+            净值 <b>{nullable(summary.netDutyKW, formatDuty)}</b> kW
           </span>
         </div>
       </div>
 
       <div className="data-table-wrap">
-        {energyBalance.length === 0 ? (
+        {energyRows.length === 0 ? (
           <div className="results-empty">流程中尚无单元设备。</div>
         ) : (
           <table className="data-table energy-table">
@@ -338,12 +572,20 @@ function EnergyView({ simulation }: { simulation: SimulationResult }) {
               </tr>
             </thead>
             <tbody>
-              {energyBalance.map((row) => (
-                <tr key={row.nodeId}>
+              {energyRows.map((row: UiEnergyRow) => (
+                <tr
+                  key={row.nodeId}
+                  className={row.status === 'calculated' ? '' : 'is-blocked'}
+                >
                   <td>
                     <div className="stream-cell">
                       <span className="stream-tag">{row.tag}</span>
                       <span className="stream-name">{row.name}</span>
+                      {row.status !== 'calculated' && (
+                        <span className={`stream-status is-${row.status}`}>
+                          {statusChip(row.status)}
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td>
@@ -353,17 +595,21 @@ function EnergyView({ simulation }: { simulation: SimulationResult }) {
                     {KIND_META[row.category].cnName}
                   </td>
                   <td
-                    className={`is-num is-strong ${row.duty < 0 ? 'is-cooling' : ''}`}
+                    className={`is-num is-strong ${row.dutyKW !== null && row.dutyKW < 0 ? 'is-cooling' : ''}`}
                   >
-                    {formatSigned(row.duty)}
+                    {row.dutyKW === null ? '—' : formatSigned(row.dutyKW)}
                   </td>
                   <td>
-                    <div className="share-cell">
-                      <span className="share-bar">
-                        <i style={{ width: `${Math.min(100, row.share)}%` }} />
-                      </span>
-                      <b>{formatPercent(row.share)}%</b>
-                    </div>
+                    {row.share === null ? (
+                      '—'
+                    ) : (
+                      <div className="share-cell">
+                        <span className="share-bar">
+                          <i style={{ width: `${Math.min(100, row.share)}%` }} />
+                        </span>
+                        <b>{formatPercent(row.share)}%</b>
+                      </div>
+                    )}
                   </td>
                   <td className="is-note">{row.note}</td>
                 </tr>
@@ -376,7 +622,7 @@ function EnergyView({ simulation }: { simulation: SimulationResult }) {
   )
 }
 
-function createTemperatureOption(points: ChartPoint[]) {
+function createTemperatureOption(points: UiChartPoint[]) {
   return {
     animation: false,
     color: ['#0e9384'],
@@ -430,7 +676,7 @@ function createTemperatureOption(points: ChartPoint[]) {
   }
 }
 
-function createFlowOption(points: ChartPoint[]) {
+function createFlowOption(points: UiChartPoint[]) {
   return {
     animation: false,
     color: ['#3d6f9e'],
@@ -479,7 +725,13 @@ function createFlowOption(points: ChartPoint[]) {
   }
 }
 
-function ChartsView({ simulation }: { simulation: SimulationResult }) {
+function ChartsView({
+  simulation,
+  isStale,
+}: {
+  simulation: UiSimulationView
+  isStale: boolean
+}) {
   const temperatureOption = useMemo(
     () => createTemperatureOption(simulation.temperatureProfile),
     [simulation.temperatureProfile],
@@ -489,45 +741,344 @@ function ChartsView({ simulation }: { simulation: SimulationResult }) {
     [simulation.flowProfile],
   )
 
-  return (
-    <div className="charts-grid">
-      <article className="chart-card">
-        <div className="chart-card__head">
-          <span>物流温度分布</span>
-          <em>TEMPERATURE PROFILE · °C</em>
-        </div>
-        <div className="chart-card__body">
-          {simulation.temperatureProfile.length > 0 ? (
-            <ReactEChartsCore
-              echarts={echarts}
-              option={temperatureOption}
-              notMerge
-              style={{ width: '100%', height: '100%' }}
-            />
-          ) : (
-            <div className="results-empty">暂无温度数据。</div>
-          )}
-        </div>
-      </article>
+  if (simulation.status === 'pending') {
+    return (
+      <div className="results-empty">
+        等待 Engine 运行后生成图表。不会显示任何 demo 占位曲线。
+      </div>
+    )
+  }
 
-      <article className="chart-card">
-        <div className="chart-card__head">
-          <span>物流流量分布</span>
-          <em>STREAM FLOW · t/h</em>
+  if (simulation.status === 'failed') {
+    return (
+      <div className="results-empty">
+        本次 Engine 计算失败，不绘制图表。请查看概要页诊断。
+      </div>
+    )
+  }
+
+  const note = isStale
+    ? '上次计算结果 · 当前流程已修改，图表不代表当前流程'
+    : simulation.status === 'partial'
+      ? '部分结果 · 仅显示已计算成功物流的图表数据'
+      : null
+
+  return (
+    <div className="charts-view">
+      {note && <div className="chart-status-note">{note}</div>}
+      <div className="charts-grid">
+        <article className="chart-card">
+          <div className="chart-card__head">
+            <span>物流温度分布</span>
+            <em>TEMPERATURE PROFILE · °C</em>
+          </div>
+          <div className="chart-card__body">
+            {simulation.temperatureProfile.length > 0 ? (
+              <ReactEChartsCore
+                echarts={echarts}
+                option={temperatureOption}
+                notMerge
+                style={{ width: '100%', height: '100%' }}
+              />
+            ) : (
+              <div className="results-empty">暂无已计算温度数据。</div>
+            )}
+          </div>
+        </article>
+
+        <article className="chart-card">
+          <div className="chart-card__head">
+            <span>物流流量分布</span>
+            <em>STREAM FLOW · t/h</em>
+          </div>
+          <div className="chart-card__body">
+            {simulation.flowProfile.length > 0 ? (
+              <ReactEChartsCore
+                echarts={echarts}
+                option={flowOption}
+                notMerge
+                style={{ width: '100%', height: '100%' }}
+              />
+            ) : (
+              <div className="results-empty">暂无已计算流量数据。</div>
+            )}
+          </div>
+        </article>
+      </div>
+    </div>
+  )
+}
+
+function TraceValueEntry({
+  field,
+  value,
+}: {
+  field: string
+  value: string | number | boolean | null
+}) {
+  const display = displayTraceValue(field, value)
+  return (
+    <p title={`${field} = ${display.original}`}>
+      <em>{field}</em>
+      <b>{display.display}</b>
+      {display.converted && (
+        <small className="trace-step__original">{display.original}</small>
+      )}
+    </p>
+  )
+}
+
+function TraceStep({ trace }: { trace: CalculationTrace }) {
+  return (
+    <div className="trace-step">
+      <div className="trace-step__head">
+        <span>{trace.step}</span>
+        <em>{trace.method}</em>
+      </div>
+      <code>{trace.formula}</code>
+      <div className="trace-step__values">
+        <div>
+          <span>输入 · 原始字段名</span>
+          {Object.entries(trace.inputs).map(([key, value]) => (
+            <TraceValueEntry key={key} field={key} value={value} />
+          ))}
         </div>
-        <div className="chart-card__body">
-          {simulation.flowProfile.length > 0 ? (
-            <ReactEChartsCore
-              echarts={echarts}
-              option={flowOption}
-              notMerge
-              style={{ width: '100%', height: '100%' }}
-            />
-          ) : (
-            <div className="results-empty">暂无流量数据。</div>
-          )}
+        <div>
+          <span>输出 · 原始字段名</span>
+          {Object.entries(trace.outputs).map(([key, value]) => (
+            <TraceValueEntry key={key} field={key} value={value} />
+          ))}
         </div>
-      </article>
+      </div>
+      <div className="trace-step__assumptions">
+        {trace.assumptions.join(' · ')}
+      </div>
+    </div>
+  )
+}
+
+function TraceView({ simulation }: { simulation: UiSimulationView }) {
+  const entries = Object.entries(simulation.traces)
+  if (entries.length === 0) {
+    return (
+      <div className="results-empty">
+        当前运行没有可展示的 Engine 计算 Trace。
+      </div>
+    )
+  }
+
+  return (
+    <div className="trace-view">
+      {entries.map(([nodeId, traces]) => {
+        const equipment = simulation.equipment[nodeId]
+        return (
+          <article className="trace-card" key={nodeId}>
+            <header className="trace-card__head">
+              <span className="stream-tag">{equipment?.tag ?? nodeId}</span>
+              <strong>{equipment?.kind ?? 'UNIT'}</strong>
+              <em>{traces.length} STEPS</em>
+            </header>
+            <div className="trace-card__body">
+              {traces.map((trace, index) => (
+                <TraceStep
+                  trace={trace}
+                  key={`${trace.step}-${index}`}
+                />
+              ))}
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
+function formatComparisonValue(
+  metric: ComparisonMetric,
+  value: number | null,
+): string {
+  if (value === null || !Number.isFinite(value)) {
+    return '—'
+  }
+  if (metric.key === 'massClosure') {
+    return `${formatPercent(value)} %`
+  }
+  if (metric.key === 'heaterDuty') {
+    return `${formatDuty(value)} ${metric.unit}`
+  }
+  if (
+    metric.key === 'mixerOutletTemperature' ||
+    metric.key === 'productTemperature'
+  ) {
+    return `${formatTemperature(value)} ${metric.unit}`
+  }
+  return `${formatFlow(value)} ${metric.unit}`
+}
+
+function formatComparisonDelta(metric: ComparisonMetric): string {
+  if (
+    metric.delta === null ||
+    metric.direction === 'unavailable'
+  ) {
+    return '—'
+  }
+  const digits = metric.key === 'massClosure' ? 1 : 2
+  return `${formatSigned(metric.delta, digits)} ${metric.unit}`
+}
+
+const DIRECTION_LABELS: Record<
+  ComparisonMetric['direction'],
+  string
+> = {
+  up: '↑ 上升',
+  down: '↓ 下降',
+  same: '— 持平',
+  unavailable: '— 不可用',
+}
+
+function CompareView({
+  simulation,
+  comparison,
+  isStale,
+}: {
+  simulation: UiSimulationView
+  comparison: RunComparison | null
+  isStale: boolean
+}) {
+  if (simulation.status === 'failed') {
+    return (
+      <div className="compare-view">
+        <div className="compare-head">
+          <div>
+            <span>运行对比</span>
+            <em>RUN COMPARISON</em>
+          </div>
+        </div>
+        <div className="compare-note is-error">
+          本次 Engine 运行失败，没有可用于本次对比的新数值。
+          {comparison
+            ? '下表保留最近两次成功/部分运行，仅作历史参考。'
+            : '历史结果仍保留在概要页的失败诊断下方。'}
+        </div>
+        {comparison && (
+          <ComparisonTable comparison={comparison} historical />
+        )}
+      </div>
+    )
+  }
+
+  if (!comparison) {
+    return (
+      <div className="result-state">
+        <div className="result-state__head">
+          <span className="result-state__glyph">
+            <Info size={16} strokeWidth={1.8} />
+          </span>
+          <div>
+            <h3>暂无历史对比</h3>
+            <p>
+              首次 Engine 计算没有上一次真实运行可比较。再次点击运行仿真后，
+              这里会比较两次 Engine 结果。
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="compare-view">
+      <div className="compare-head">
+        <div>
+          <span>运行对比</span>
+          <em>RUN COMPARISON</em>
+        </div>
+        <div className="compare-times">
+          <span>
+            前一次{' '}
+            <b>
+              {comparison.previousRunAt
+                ? formatClock(comparison.previousRunAt)
+                : '—'}
+            </b>
+          </span>
+          <span>
+            后一次{' '}
+            <b>
+              {comparison.currentRunAt
+                ? formatClock(comparison.currentRunAt)
+                : '—'}
+            </b>
+          </span>
+        </div>
+      </div>
+      {isStale && (
+        <div className="compare-note is-stale">
+          当前流程已修改；以下仍是之前两次真实 Engine 运行，不代表当前流程。
+        </div>
+      )}
+      {simulation.status === 'partial' && (
+        <div className="compare-note">
+          本次运行部分完成；不可用的数值显示为 —，不会按 0 计算。
+        </div>
+      )}
+      <ComparisonTable comparison={comparison} />
+      <p className="compare-footnote">
+        仅比较真实 Engine 运行；未点击 Run 的流程修改不会生成新对比。
+      </p>
+    </div>
+  )
+}
+
+function ComparisonTable({
+  comparison,
+  historical = false,
+}: {
+  comparison: RunComparison
+  historical?: boolean
+}) {
+  return (
+    <div className="compare-table-wrap">
+      <table className="data-table compare-table">
+        <thead>
+          <tr>
+            <th>指标 METRIC</th>
+            <th className="is-num">
+              {historical ? '前一次成功' : '上次'}
+            </th>
+            <th className="is-num">
+              {historical ? '后一次成功' : '本次'}
+            </th>
+            <th>变化</th>
+          </tr>
+        </thead>
+        <tbody>
+          {comparison.metrics.map((metric) => (
+            <tr key={metric.key}>
+              <td>
+                <span className="compare-metric__label">{metric.label}</span>
+                <small>{metric.unit}</small>
+              </td>
+              <td className="is-num">
+                {formatComparisonValue(metric, metric.previousValue)}
+              </td>
+              <td className="is-num is-strong">
+                {formatComparisonValue(metric, metric.currentValue)}
+              </td>
+              <td>
+                <span
+                  className={`compare-direction is-${metric.direction}`}
+                >
+                  {DIRECTION_LABELS[metric.direction]}
+                </span>
+                <b className="compare-delta">
+                  {formatComparisonDelta(metric)}
+                </b>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -538,25 +1089,39 @@ export function ResultsPanel({
   running,
   isStale,
   lastRunAt,
+  comparison,
+  history,
   onToggleCollapsed,
 }: ResultsPanelProps) {
   const [activeTab, setActiveTab] = useState<ResultsTab>('summary')
+  const failed = simulation.status === 'failed'
+  const staleDisplay = isStale && !failed
 
   const statusClass = running
     ? 'is-running'
-    : isStale
+    : staleDisplay
       ? 'is-stale'
-      : lastRunAt
+      : simulation.status === 'success'
         ? 'is-done'
-        : 'is-preview'
+        : simulation.status === 'partial'
+          ? 'is-partial'
+          : failed
+            ? 'is-failed'
+            : 'is-preview'
 
   const statusText = running
-    ? '求解中…'
-    : isStale
-      ? '参数已更新 · 待重新运行'
-      : lastRunAt
-        ? `已运行 ${formatClock(lastRunAt)}`
-        : '演示预览 · 尚未运行'
+    ? 'Engine 求解中…'
+    : failed
+      ? `计算失败${isStale ? ' · 结果已过期' : ''}${
+          lastRunAt === null ? '' : ` · ${formatClock(lastRunAt)}`
+        }`
+      : isStale
+        ? '结果已过期 · 请重新运行'
+        : simulation.status === 'pending'
+          ? '尚未运行'
+          : `${statusLabel(simulation.status)}${
+              lastRunAt === null ? '' : ` · ${formatClock(lastRunAt)}`
+            }`
 
   return (
     <section
@@ -569,10 +1134,16 @@ export function ResultsPanel({
             <BarChart3 size={14} strokeWidth={1.8} />
           </span>
           <h2>仿真结果</h2>
-          <span className="results-badge results-badge--demo">DEMO</span>
-          <span className="results-badge results-badge--sim">
-            SIMULATED DATA
-          </span>
+          <span className="results-badge results-badge--engine">ENGINE</span>
+          {staleDisplay ? (
+            <span className="results-badge results-badge--stale">
+              STALE · 上次结果
+            </span>
+          ) : (
+            <span className="results-badge results-badge--model">
+              BASIC TEACHING MODEL
+            </span>
+          )}
         </div>
 
         <nav className="results-tabs" aria-label="仿真结果视图">
@@ -598,6 +1169,15 @@ export function ResultsPanel({
             )}
             <span className="results-status__text">{statusText}</span>
           </span>
+          <span
+            className={`results-badge results-badge--state is-${failed ? 'failed' : staleDisplay ? 'stale' : simulation.status}`}
+          >
+            {failed
+              ? '计算失败'
+              : staleDisplay
+                ? '上次结果'
+                : statusLabel(simulation.status)}
+          </span>
           <button
             type="button"
             className="results-collapse"
@@ -618,7 +1198,7 @@ export function ResultsPanel({
       {!collapsed && (
         <div className="results-body">
           {activeTab === 'summary' && (
-            <SummaryView simulation={simulation} />
+            <SummaryView simulation={simulation} history={history} />
           )}
           {activeTab === 'material' && (
             <MaterialView simulation={simulation} />
@@ -627,7 +1207,17 @@ export function ResultsPanel({
             <EnergyView simulation={simulation} />
           )}
           {activeTab === 'charts' && (
-            <ChartsView simulation={simulation} />
+            <ChartsView simulation={simulation} isStale={isStale} />
+          )}
+          {activeTab === 'compare' && (
+            <CompareView
+              simulation={simulation}
+              comparison={comparison}
+              isStale={isStale}
+            />
+          )}
+          {activeTab === 'trace' && (
+            <TraceView simulation={simulation} />
           )}
         </div>
       )}

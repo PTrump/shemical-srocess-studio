@@ -1,12 +1,24 @@
 {
   "name": "shemical-srocess-studio",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Teaching-oriented steady-state chemical process simulation workbench with an independent TypeScript calculation engine.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PTrump/shemical-srocess-studio.git"
+  },
+  "homepage": "https://github.com/PTrump/shemical-srocess-studio#readme",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || ^26.0.0",
+    "npm": ">=10"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -24,6 +36,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "oxlint": "^1.90.0",
     "typescript": "~7.0.2",
-    "vite": "^8.3.6"
+    "vite": "^8.3.6",
+    "vitest": "5.1.1"
   }
 }

@@ -1,8 +1,8 @@
 import { createContext, useContext } from 'react'
-import type { SimulationResult } from '../types/process'
+import type { UiSimulationView } from '../simulation'
 
 export interface StudioCanvasContextValue {
-  simulation: SimulationResult
+  simulation: UiSimulationView
   running: boolean
   selectedNodeId: string | null
   deleteNode: (id: string) => void

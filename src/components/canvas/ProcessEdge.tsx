@@ -14,6 +14,13 @@ import {
 } from '../../utils/format'
 import './ProcessEdge.css'
 
+const STATUS_LABELS: Record<string, string> = {
+  calculated: 'CALCULATED',
+  blocked: 'BLOCKED',
+  invalid: 'INVALID',
+  unavailable: 'NOT RUN',
+}
+
 export function ProcessEdge({
   id,
   source,
@@ -28,10 +35,10 @@ export function ProcessEdge({
 }: EdgeProps) {
   const { simulation, selectedNodeId, deleteEdge, selectEdge } =
     useStudioCanvas()
-  const edgeData = simulation.materialBalance.find(
-    (row) => row.edgeId === id,
-  )
+  const streamResult = simulation.streams[id]
   const stream = simulation.edgeStreams[id]
+  const isCalculated =
+    streamResult?.status === 'calculated' && stream !== undefined
   const [path, labelX, labelY] = getSmoothStepPath({
     sourceX,
     sourceY,
@@ -43,17 +50,24 @@ export function ProcessEdge({
     offset: 16,
   })
 
-  const tag = edgeData?.tag ?? 'S-???'
-  const name = edgeData?.name ?? 'Process stream'
+  const tag = streamResult?.tag ?? 'S-???'
+  const name = streamResult?.name ?? 'Process stream'
+  const status = streamResult?.status ?? 'unavailable'
+  const statusLabel =
+    simulation.status === 'pending'
+      ? 'PENDING'
+      : STATUS_LABELS[status] ?? status
   const isRelated =
     !selected &&
     selectedNodeId !== null &&
     (source === selectedNodeId || target === selectedNodeId)
   const stroke = selected
     ? '#0e9384'
-    : isRelated
-      ? '#397f7a'
-      : '#5b7185'
+    : status !== 'calculated'
+      ? '#9aa8b5'
+      : isRelated
+        ? '#397f7a'
+        : '#5b7185'
   const labelTop = labelY - 8
 
   const handleSelect = (event: MouseEvent<HTMLDivElement>) => {
@@ -79,7 +93,7 @@ export function ProcessEdge({
       <BaseEdge
         id={id}
         path={path}
-        className={`process-edge-line${selected ? ' is-selected' : ''}${isRelated ? ' is-related' : ''}`}
+        className={`process-edge-line${selected ? ' is-selected' : ''}${isRelated ? ' is-related' : ''}${status !== 'calculated' ? ' is-blocked' : ''}`}
         markerEnd={`url(#${selected || isRelated ? 'cps-arrow-active' : 'cps-arrow'})`}
         interactionWidth={22}
         style={{
@@ -94,13 +108,13 @@ export function ProcessEdge({
       />
       <EdgeLabelRenderer>
         <div
-          className={`process-edge-label nodrag nopan${selected ? ' is-selected' : ''}${isRelated ? ' is-related' : ''}`}
+          className={`process-edge-label nodrag nopan${selected ? ' is-selected' : ''}${isRelated ? ' is-related' : ''}${status !== 'calculated' ? ' is-blocked' : ''}`}
           style={{
             transform: `translate(-50%, -100%) translate(${labelX}px, ${labelTop}px)`,
           }}
           onClick={handleSelect}
           onPointerDown={(event) => event.stopPropagation()}
-          title={`${tag} · ${name}\n${formatFlow(stream?.flow ?? 0)} t/h · ${formatTemperature(stream?.temperature ?? 0)} °C · ${formatPressure(stream?.pressure ?? 0)} bar`}
+          title={`${tag} · ${name}\n${statusLabel}${isCalculated ? `\n${formatFlow(stream.flowTph)} t/h · ${formatTemperature(stream.temperatureC)} °C · ${formatPressure(stream.pressureBar)} bar` : ''}`}
           role="button"
           tabIndex={0}
           onKeyDown={(event) => {
@@ -111,14 +125,22 @@ export function ProcessEdge({
           }}
         >
           <span className="process-edge-label__tag">{tag}</span>
-          <span className="process-edge-label__value">
-            <b>{formatFlow(stream?.flow ?? 0)}</b>
-            <small>t/h</small>
-          </span>
-          <span className="process-edge-label__value">
-            <b>{formatTemperature(stream?.temperature ?? 0)}</b>
-            <small>°C</small>
-          </span>
+          {isCalculated ? (
+            <>
+              <span className="process-edge-label__value">
+                <b>{formatFlow(stream.flowTph)}</b>
+                <small>t/h</small>
+              </span>
+              <span className="process-edge-label__value">
+                <b>{formatTemperature(stream.temperatureC)}</b>
+                <small>°C</small>
+              </span>
+            </>
+          ) : (
+            <span className="process-edge-label__status">
+              {statusLabel}
+            </span>
+          )}
           {selected && (
             <button
               type="button"
